@@ -1,7 +1,8 @@
 import React from "react";
-import { format, addMonths, subMonths, eachDayOfInterval, startOfMonth, endOfMonth, isSameDay, isBefore, parseISO, startOfWeek, endOfWeek, isSameMonth } from "date-fns";
-import { ptBR } from "date-fns/locale";
 import { Servico } from "../types";
+import { cn } from "../lib/utils";
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameDay, addMonths, subMonths, startOfWeek, endOfWeek } from "date-fns";
+import { ptBR } from "date-fns/locale";
 
 interface Props {
   data: Servico[];
@@ -9,93 +10,99 @@ interface Props {
 
 export const GithubCalendar: React.FC<Props> = ({ data }) => {
   const today = new Date();
-  const startDate = startOfMonth(subMonths(today, 1));
-  const endDate = endOfMonth(addMonths(today, 1));
+  const months = [
+    subMonths(today, 1),
+    today,
+    addMonths(today, 1)
+  ];
 
-  const getDayStatus = (day: Date) => {
-    const servicesOnDay = data.filter(s => {
-      if (!s["DATA INSTALAÇÃO"]) return false;
-      const serviceDate = parseISO(s["DATA INSTALAÇÃO"]);
-      return isSameDay(serviceDate, day);
+  const getDayStatus = (date: Date) => {
+    const servicesOnDay = data.filter(item => {
+      const dateVal = item["DATA INSTALAÇÃO"] || item["DATA"];
+      if (!dateVal) return false;
+      
+      let itemDate: Date | null = null;
+
+      if (dateVal instanceof Date) {
+        itemDate = dateVal;
+      } else if (typeof dateVal === "number") {
+        // Excel serial date
+        const excelEpoch = new Date(1899, 11, 30);
+        itemDate = new Date(excelEpoch.getTime() + dateVal * 86400000);
+      } else if (typeof dateVal === "string" && dateVal.includes("/")) {
+        // Handle DD/MM/YYYY
+        const parts = dateVal.split("/");
+        if (parts.length === 3) {
+          const day = parseInt(parts[0], 10);
+          const month = parseInt(parts[1], 10);
+          const year = parseInt(parts[2], 10);
+          itemDate = new Date(year, month - 1, day);
+        }
+      }
+
+      if (!itemDate || isNaN(itemDate.getTime())) {
+        itemDate = new Date(dateVal);
+      }
+      
+      return isSameDay(itemDate, date);
     });
 
-    if (servicesOnDay.length === 0) return "bg-gray-50 text-gray-400";
+    if (servicesOnDay.length === 0) return null;
 
-    const hasLate = servicesOnDay.some(s => 
-      s["STATUS INSTALAÇÃO"].toUpperCase() === "PENDENTE" && isBefore(parseISO(s["DATA INSTALAÇÃO"]), today)
-    );
-    const hasInProgress = servicesOnDay.some(s => 
-      s["STATUS INSTALAÇÃO"].toUpperCase() === "EM ANDAMENTO" || 
-      (s["STATUS INSTALAÇÃO"].toUpperCase() === "PENDENTE" && !isBefore(parseISO(s["DATA INSTALAÇÃO"]), today))
-    );
-    const allDone = servicesOnDay.every(s => s["STATUS INSTALAÇÃO"].toUpperCase() === "CONCLUÍDO");
-
-    if (hasLate) return "bg-[var(--google-red)] text-white";
-    if (allDone) return "bg-[var(--google-green)] text-white";
-    if (hasInProgress) return "bg-[var(--google-yellow)] text-gray-800";
+    const statuses = servicesOnDay.map(s => (s["STATUS INSTALAÇÃO"] || "").toUpperCase().trim());
     
-    return "bg-gray-300 text-gray-600";
+    // Priority: ATRASADO (Red) > PENDENTE/EM ANDAMENTO (Yellow) > CONCLUÍDO (Green)
+    if (statuses.some(s => s === "ATRASADO")) return "bg-[var(--google-red)]";
+    if (statuses.some(s => s === "PENDENTE" || s === "EM ANDAMENTO")) return "bg-[var(--google-yellow)]";
+    if (statuses.every(s => s === "CONCLUÍDO")) return "bg-[var(--google-green)]";
+    
+    return "bg-[var(--google-red)]"; // Fallback for other non-concluded statuses
   };
 
-  const months = [];
-  let current = startDate;
-  while (isBefore(current, endDate)) {
-    months.push(current);
-    current = addMonths(current, 1);
-  }
+  const renderMonth = (monthDate: Date) => {
+    const start = startOfMonth(monthDate);
+    const end = endOfMonth(monthDate);
+    
+    const calendarStart = startOfWeek(start, { weekStartsOn: 0 });
+    const calendarEnd = endOfWeek(end, { weekStartsOn: 0 });
+    const allDays = eachDayOfInterval({ start: calendarStart, end: calendarEnd });
 
-  const weekDays = ["D", "S", "T", "Q", "Q", "S", "S"];
+    return (
+      <div key={monthDate.toISOString()} className="flex-1 flex flex-col bg-gray-50/50 p-[2%] rounded-xl border border-gray-100 overflow-hidden min-h-0">
+        <h4 className="text-[min(1.5vh,14px)] font-black text-gray-700 uppercase mb-[1%] border-b border-gray-200 pb-[0.5%] flex justify-between items-center shrink-0">
+          <span>{format(monthDate, "MMMM", { locale: ptBR })}</span>
+          <span className="text-[min(1vh,10px)] opacity-60 font-bold">{format(monthDate, "yyyy")}</span>
+        </h4>
+        <div className="flex-1 grid grid-cols-7 grid-rows-6 gap-[1%] min-h-0">
+          {["D", "S", "T", "Q", "Q", "S", "S"].map((d, idx) => (
+            <div key={idx} className="flex items-center justify-center text-[min(1.2vh,11px)] font-black text-gray-400">{d}</div>
+          ))}
+          {allDays.map((day, i) => {
+            const isCurrentMonth = day.getMonth() === monthDate.getMonth();
+            const statusClass = isCurrentMonth ? getDayStatus(day) : null;
+            
+            return (
+              <div
+                key={i}
+                className={cn(
+                  "rounded-sm transition-all duration-300 flex items-center justify-center text-[min(1.3vh,12px)] font-black shadow-sm h-full w-full",
+                  !isCurrentMonth ? "opacity-0 pointer-events-none" : (statusClass || "bg-white border border-gray-100 text-gray-300")
+                )}
+                title={isCurrentMonth ? format(day, "dd/MM/yyyy") : ""}
+              >
+                {isCurrentMonth && day.getDate()}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <div className="h-full bg-white border border-gray-200 rounded-xl shadow-sm p-1 flex flex-col min-h-0 overflow-hidden">
-      <div className="flex-1 grid grid-rows-3 gap-1 min-h-0">
-        {months.map((month, mIdx) => {
-          const monthStart = startOfMonth(month);
-          const monthEnd = endOfMonth(month);
-          const calendarStart = startOfWeek(monthStart, { locale: ptBR });
-          const calendarEnd = endOfWeek(monthEnd, { locale: ptBR });
-          
-          const calendarDays = eachDayOfInterval({
-            start: calendarStart,
-            end: calendarEnd
-          });
-
-          return (
-            <div key={mIdx} className="flex flex-col min-h-0 overflow-hidden px-0.5">
-              <div className="flex justify-between items-center mb-0 border-b border-gray-100 pb-0 shrink-0">
-                <span className="text-[9px] uppercase font-black text-gray-400 leading-none">
-                  {format(month, "MMMM", { locale: ptBR })}
-                </span>
-              </div>
-              
-              <div className="grid grid-cols-7 gap-0.5 mb-0 shrink-0">
-                {weekDays.map((d, i) => (
-                  <span key={i} className="text-[6px] text-center font-bold text-gray-300">{d}</span>
-                ))}
-              </div>
-              
-              <div className="grid grid-cols-7 gap-0.5 flex-1 min-h-0 pb-1">
-                {calendarDays.map((day, dIdx) => {
-                  const isCurrentMonth = isSameMonth(day, month);
-                  const isToday = isSameDay(day, today);
-                  
-                  return (
-                    <div
-                      key={dIdx}
-                      className={`
-                        flex items-center justify-center rounded-sm text-[8px] font-bold transition-all min-h-0
-                        ${!isCurrentMonth ? "opacity-0 pointer-events-none" : getDayStatus(day)}
-                        ${isToday ? "ring-1 ring-blue-400 ring-offset-0 z-10" : ""}
-                      `}
-                    >
-                      {format(day, "d")}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
+    <div className="flex-1 bg-white border border-gray-200 rounded-xl shadow-sm p-[2%] flex flex-col overflow-hidden h-full">
+      <div className="flex-1 grid grid-rows-3 gap-[2%] min-h-0 h-full">
+        {months.map(renderMonth)}
       </div>
     </div>
   );
